@@ -393,13 +393,27 @@ def create_four_graph_interactive_app(whole_data, part_data, rndf_data, lndf_dat
             marker=dict(
                 size=30,  # Smaller markers for grid layout
                 color='rgba(0,0,0,0)',  # Completely transparent
-                #line=dict(width=0)
             ),
             customdata=custom_data,
             hovertemplate=None,
             hoverinfo="none",
             name='Hover Targets',
             showlegend=False
+        ))
+
+        # Add empty trace for hover circles (to be updated dynamically)
+        fig.add_trace(go.Scatter(
+            x=[],
+            y=[],
+            mode='markers',
+            marker=dict(
+                size=40,
+                color='rgba(255, 0, 0, 0)',
+                line=dict(width=3, color='red')
+            ),
+            name='Hover Circle',
+            showlegend=False,
+            hoverinfo='skip'
         ))
 
         fig.update_layout(
@@ -507,22 +521,30 @@ def create_four_graph_interactive_app(whole_data, part_data, rndf_data, lndf_dat
 
    
 
-    # Client-side callback to detect hover and store hovered pcl_id and indices
+    # Store parsed data globally to avoid repeated parsing
     app.clientside_callback(
         """
-        function(rndf_hover, lndf_hover, whole_hover, part_hover, all_data_str) {
-            // Parse the data from the hidden div
-            var all_data = JSON.parse(all_data_str);
+        function(all_data_str) {
+            if (!window.dashAppData) {
+                window.dashAppData = JSON.parse(all_data_str);
+            }
+            return 'data-loaded';
+        }
+        """,
+        Output('hover-state', 'id'),
+        [Input('all-data-store', 'children')]
+    )
 
-            // Check which input was triggered using dash_clientside.callback_context
+    # Optimized client-side callback to detect hover
+    app.clientside_callback(
+        """
+        function(rndf_hover, lndf_hover, whole_hover, part_hover) {
             var ctx = dash_clientside.callback_context;
-            if (!ctx.triggered.length) {
+            if (!ctx.triggered.length || !window.dashAppData) {
                 return null;
             }
 
             var trigger_id = ctx.triggered[0].prop_id.split('.')[0];
-
-            // Get hover data from the triggered graph
             var hover_data_map = {
                 'rndf-plot': rndf_hover,
                 'lndf-plot': lndf_hover,
@@ -536,11 +558,20 @@ def create_four_graph_interactive_app(whole_data, part_data, rndf_data, lndf_dat
                 hover_data.points[0].customdata !== undefined) {
                 var pcl_id = hover_data.points[0].customdata;
 
-                // Find the index of this pcl_id in each graph's data
-                var idxs = [];
-                ['rndf', 'lndf', 'whole', 'part'].forEach(function(plot) {
-                    var idx = all_data[plot].pcl_ids.indexOf(pcl_id);
-                    idxs.push(idx);
+                // Use pre-computed lookup table for faster index finding
+                if (!window.pcl_id_lookup) {
+                    window.pcl_id_lookup = {};
+                    ['rndf', 'lndf', 'whole', 'part'].forEach(function(plot) {
+                        window.pcl_id_lookup[plot] = {};
+                        window.dashAppData[plot].pcl_ids.forEach(function(id, idx) {
+                            window.pcl_id_lookup[plot][id] = idx;
+                        });
+                    });
+                }
+
+                var idxs = ['rndf', 'lndf', 'whole', 'part'].map(function(plot) {
+                    return window.pcl_id_lookup[plot][pcl_id] !== undefined ?
+                           window.pcl_id_lookup[plot][pcl_id] : -1;
                 });
 
                 return JSON.stringify({'pcl_id': pcl_id, 'indices': idxs});
@@ -553,19 +584,27 @@ def create_four_graph_interactive_app(whole_data, part_data, rndf_data, lndf_dat
         [Input('rndf-plot', 'hoverData'),
          Input('lndf-plot', 'hoverData'),
          Input('whole-plot', 'hoverData'),
-         Input('part-plot', 'hoverData'),
-         Input('all-data-store', 'children')]
+         Input('part-plot', 'hoverData')]
     )
 
-    # Client-side callback to update image display and add circles to all graphs
+    # Store image data globally to avoid repeated parsing
     app.clientside_callback(
         """
-        function(hover_state, all_data_str, image_data_str, rndf_fig, lndf_fig, whole_fig, part_fig) {
-            // Parse data from hidden divs
-            var all_data = JSON.parse(all_data_str);
-            var image_data = JSON.parse(image_data_str);
+        function(image_data_str) {
+            if (!window.dashImageData) {
+                window.dashImageData = JSON.parse(image_data_str);
+            }
+            return {'display': 'none'};
+        }
+        """,
+        Output('image-data-store', 'style'),
+        [Input('image-data-store', 'children')]
+    )
 
-            // Create empty image figure for hidden state
+    # Optimized callback to update only the image display
+    app.clientside_callback(
+        """
+        function(hover_state) {
             var empty_image_fig = {
                 'data': [],
                 'layout': {
@@ -580,23 +619,19 @@ def create_four_graph_interactive_app(whole_data, part_data, rndf_data, lndf_dat
                 }
             };
 
-            if (!hover_state) {
-                return [empty_image_fig, rndf_fig, lndf_fig, whole_fig, part_fig];
+            if (!hover_state || !window.dashImageData) {
+                return empty_image_fig;
             }
 
             try {
                 var hover_data = JSON.parse(hover_state);
                 var pcl_id = hover_data.pcl_id;
-                var indices = hover_data.indices;
 
-                // Create image figure
-                var image_fig;
-                if (image_data[pcl_id] && image_data[pcl_id].base64) {
-                    // Create a figure with the image
-                    image_fig = {
+                if (window.dashImageData[pcl_id] && window.dashImageData[pcl_id].base64) {
+                    return {
                         'data': [{
                             'type': 'image',
-                            'source': image_data[pcl_id].base64,
+                            'source': window.dashImageData[pcl_id].base64,
                             'xref': 'x',
                             'yref': 'y',
                             'x': 0,
@@ -607,17 +642,8 @@ def create_four_graph_interactive_app(whole_data, part_data, rndf_data, lndf_dat
                             'layer': 'below'
                         }],
                         'layout': {
-                            'xaxis': {
-                                'visible': false,
-                                'range': [0, 250]
-                            },
-                            'yaxis': {
-                                'visible': false,
-                                'range': [0, 250],
-                                'scaleanchor': 'x',
-                                'scaleratio': 1,
-                                'autorange': 'reversed'
-                            },
+                            'xaxis': {'visible': false, 'range': [0, 250]},
+                            'yaxis': {'visible': false, 'range': [0, 250], 'scaleanchor': 'x', 'scaleratio': 1, 'autorange': 'reversed'},
                             'showlegend': false,
                             'margin': {'l': 0, 'r': 0, 't': 0, 'b': 0},
                             'width': 270,
@@ -627,8 +653,7 @@ def create_four_graph_interactive_app(whole_data, part_data, rndf_data, lndf_dat
                         }
                     };
                 } else {
-                    // Create a figure with error text
-                    image_fig = {
+                    return {
                         'data': [],
                         'layout': {
                             'xaxis': {'visible': false},
@@ -641,71 +666,79 @@ def create_four_graph_interactive_app(whole_data, part_data, rndf_data, lndf_dat
                             'paper_bgcolor': 'white',
                             'annotations': [{
                                 'text': 'Image not found for ID: ' + pcl_id,
-                                'x': 0.5,
-                                'y': 0.5,
-                                'xref': 'paper',
-                                'yref': 'paper',
+                                'x': 0.5, 'y': 0.5,
+                                'xref': 'paper', 'yref': 'paper',
                                 'showarrow': false,
                                 'font': {'size': 12}
                             }]
                         }
                     };
                 }
+            } catch (e) {
+                console.error('Error in image display:', e);
+                return empty_image_fig;
+            }
+        }
+        """,
+        Output('hover-image-display', 'figure'),
+        [Input('hover-state', 'children')]
+    )
 
-                // Update figures with circles
-                var figures = [rndf_fig, lndf_fig, whole_fig, part_fig];
+    # Separate optimized callback for updating circles
+    app.clientside_callback(
+        """
+        function(hover_state, rndf_fig, lndf_fig, whole_fig, part_fig) {
+            if (!hover_state || !window.dashAppData) {
+                return [dash_clientside.no_update, dash_clientside.no_update,
+                        dash_clientside.no_update, dash_clientside.no_update];
+            }
+
+            try {
+                var hover_data = JSON.parse(hover_state);
+                var indices = hover_data.indices;
                 var graph_names = ['rndf', 'lndf', 'whole', 'part'];
+                var figures = [rndf_fig, lndf_fig, whole_fig, part_fig];
                 var updated_figures = [];
 
                 for (var i = 0; i < figures.length; i++) {
-                    var fig = JSON.parse(JSON.stringify(figures[i])); // Deep copy
+                    var fig = Object.assign({}, figures[i]);
+                    fig.data = [...figures[i].data];
+
                     var point_index = indices[i];
-                    var data_info = all_data[graph_names[i]];
+                    var data_info = window.dashAppData[graph_names[i]];
 
-                    // Remove existing circle traces
-                    fig.data = fig.data.filter(function(trace) {
-                        return trace.name !== 'Hover Circle';
-                    });
-
-                    // Add circle if valid index
+                    // Update the circle trace (last trace)
+                    var circle_trace_idx = fig.data.length - 1;
                     if (point_index !== -1 && point_index < data_info.embeddings.length) {
                         var embedding = data_info.embeddings[point_index];
-                        fig.data.push({
+                        fig.data[circle_trace_idx] = Object.assign({}, fig.data[circle_trace_idx], {
                             x: [embedding[0]],
-                            y: [embedding[1]],
-                            mode: 'markers',
-                            marker: {
-                                size: 40,
-                                color: 'rgba(255, 0, 0, 0)',
-                                line: {width: 3, color: 'red'}
-                            },
-                            name: 'Hover Circle',
-                            showlegend: false,
-                            hoverinfo: 'skip',
-                            type: 'scatter'
+                            y: [embedding[1]]
+                        });
+                    } else {
+                        fig.data[circle_trace_idx] = Object.assign({}, fig.data[circle_trace_idx], {
+                            x: [],
+                            y: []
                         });
                     }
 
                     updated_figures.push(fig);
                 }
 
-                return [image_fig].concat(updated_figures);
-
+                return updated_figures;
             } catch (e) {
-                console.error('Error in hover display:', e);
-                return [empty_image_fig, rndf_fig, lndf_fig, whole_fig, part_fig];
+                console.error('Error in circle update:', e);
+                return [dash_clientside.no_update, dash_clientside.no_update,
+                        dash_clientside.no_update, dash_clientside.no_update];
             }
         }
         """,
-        [Output('hover-image-display', 'figure'),
-         Output('rndf-plot', 'figure'),
+        [Output('rndf-plot', 'figure'),
          Output('lndf-plot', 'figure'),
          Output('whole-plot', 'figure'),
          Output('part-plot', 'figure')],
         [Input('hover-state', 'children')],
-        [State('all-data-store', 'children'),
-         State('image-data-store', 'children'),
-         State('rndf-plot', 'figure'),
+        [State('rndf-plot', 'figure'),
          State('lndf-plot', 'figure'),
          State('whole-plot', 'figure'),
          State('part-plot', 'figure')]

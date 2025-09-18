@@ -2,4 +2,4 @@ dash==2.18.2
 numpy==2.3.3
 Pillow==11.3.0
 plotly==5.19.0
-scikit_learn==1.4.1.post1
+

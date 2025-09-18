@@ -3,13 +3,10 @@ import os
 import os.path as osp
 import numpy as np
 import pickle
-import copy as cp
 import json
 from PIL import Image
-from sklearn.decomposition import PCA
 import plotly.express as px
 import plotly.graph_objects as go
-import dash
 from dash import Dash, dcc, html, Input, Output, State
 import base64
 from io import BytesIO

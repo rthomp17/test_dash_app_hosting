@@ -27,7 +27,7 @@ run_app:
 	mv pages_files/_dash-layout pages_files/_dash-layout.json
 	mv pages_files/_dash-dependencies pages_files/_dash-dependencies.json
 
-	ps -C python -o pid= | xargs kill -9
+	ps -C python -o pid= | xargs kill
 
 clean_dirs:
 	ls
